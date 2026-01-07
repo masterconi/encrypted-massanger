@@ -1,3 +1,5 @@
+# under heavy development be carfull when using!!!
+
 # 🔐 Ultra-Secure Messenger
 
 A production-ready, end-to-end encrypted messaging platform designed for maximum security, reliability, and performance.
