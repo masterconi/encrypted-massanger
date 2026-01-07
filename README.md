@@ -54,7 +54,7 @@ The server will start on `ws://localhost:8080`
    ```
 
 2. **Open your browser:**
-   Navigate to `http://localhost:3000`
+   Navigate to `http://localhost:8000`
 
 3. **Connect:**
    - Enter server URL: `ws://localhost:8080`
