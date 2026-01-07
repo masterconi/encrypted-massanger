@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package secure_messenger;
+
+// Core message types for the secure messaging protocol
+
+// Handshake message types
+message HandshakeInit {
+  bytes ephemeral_public_key = 1;  // X25519 public key
+  bytes identity_public_key = 2;   // Ed25519 public key
+  bytes signature = 3;             // Ed25519 signature of (ephemeral_public_key || identity_public_key)
+  uint64 timestamp = 4;            // Unix timestamp in milliseconds
+  bytes nonce = 5;                 // 16-byte random nonce
+}
+
+message HandshakeResponse {
+  bytes ephemeral_public_key = 1;  // X25519 public key
+  bytes encrypted_prekey = 2;      // Encrypted prekey material
+  bytes mac = 3;                   // Message authentication code
+  uint64 timestamp = 4;
+  bytes nonce = 5;
+}
+
+message HandshakeComplete {
+  bytes confirmation = 1;           // Confirmation that handshake succeeded
+  bytes mac = 2;
+}
+
+// Encrypted message format
+message EncryptedMessage {
+  bytes header = 1;                 // Encrypted header (ratchet state, message number)
+  bytes ciphertext = 2;            // Encrypted message body
+  bytes mac = 3;                   // Authentication tag
+  uint64 timestamp = 4;            // Server timestamp (not encrypted)
+  bytes message_id = 5;            // Unique message ID (16 bytes)
+  uint32 version = 6;              // Protocol version
+}
+
+// Message header (encrypted, contains ratchet info)
+message MessageHeader {
+  bytes dh_public_key = 1;         // X25519 public key for this message
+  uint32 message_number = 2;       // Message number in this chain
+  uint32 previous_chain_length = 3; // Length of previous chain
+  bytes chain_key = 4;             // Encrypted chain key (for skipped messages)
+}
+
+// Delivery acknowledgment
+message DeliveryAck {
+  bytes message_id = 1;            // ID of message being acknowledged
+  uint64 received_at = 2;          // Timestamp when received
+  bool success = 3;                // Whether decryption succeeded
+}
+
+// Protocol message wrapper
+message ProtocolMessage {
+  oneof message {
+    HandshakeInit handshake_init = 1;
+    HandshakeResponse handshake_response = 2;
+    HandshakeComplete handshake_complete = 3;
+    EncryptedMessage encrypted_message = 4;
+    DeliveryAck delivery_ack = 5;
+  }
+  MessageType type = 6;
+}
+
+enum MessageType {
+  HANDSHAKE_INIT = 0;
+  HANDSHAKE_RESPONSE = 1;
+  HANDSHAKE_COMPLETE = 2;
+  ENCRYPTED_MESSAGE = 3;
+  DELIVERY_ACK = 4;
+}
+
+// Server-side message storage (encrypted, server cannot decrypt)
+message StoredMessage {
+  bytes recipient_id = 1;          // Recipient identifier (hash of public key)
+  EncryptedMessage message = 2;
+  uint64 stored_at = 3;
+  uint64 expires_at = 4;           // Expiration timestamp
+  uint32 retry_count = 5;          // Number of delivery attempts
+}
+
