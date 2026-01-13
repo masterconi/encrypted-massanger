@@ -12,63 +12,40 @@ export type Nonce = Uint8Array;
 export type MAC = Uint8Array;
 export type Ciphertext = Uint8Array;
 
-/**
- * Identity key pair (Ed25519)
- * Used for long-term identity and signing
- */
 export interface IdentityKeyPair {
-  publicKey: PublicKey;  // 32 bytes
-  privateKey: PrivateKey; // 64 bytes (32 bytes seed + 32 bytes public key)
+  publicKey: PublicKey;
+  privateKey: PrivateKey;
 }
 
-/**
- * Ephemeral key pair (X25519)
- * Used for key exchange in handshakes
- */
 export interface EphemeralKeyPair {
-  publicKey: PublicKey;  // 32 bytes
-  privateKey: PrivateKey; // 32 bytes
+  publicKey: PublicKey;
+  privateKey: PrivateKey;
 }
 
-/**
- * Chain key for Double Ratchet
- * Used to derive message keys
- */
 export interface ChainKey {
-  key: Uint8Array;  // 32 bytes
-  index: number;    // Current index in chain
+  key: Uint8Array;
+  index: number;
 }
 
-/**
- * Message key for encryption/decryption
- * Derived from chain key, used once, then discarded
- */
 export interface MessageKey {
-  encryptionKey: Uint8Array;  // 32 bytes
-  macKey: Uint8Array;         // 32 bytes
-  iv: Uint8Array;             // 12 bytes (for AES-GCM)
-  index: number;              // Message number
+  encryptionKey: Uint8Array;
+  macKey: Uint8Array;
+  iv?: Uint8Array;
+  index: number;
 }
 
-/**
- * Root key for Double Ratchet
- * Used to derive new chain keys
- */
 export interface RootKey {
-  key: Uint8Array;  // 32 bytes
+  key: Uint8Array;
 }
 
-/**
- * Double Ratchet state
- * Maintains separate sending and receiving chains
- */
 export interface RatchetState {
   rootKey: RootKey;
-  sendingChainKey?: ChainKey;
-  receivingChainKey?: ChainKey;
+  sendingChainKey: ChainKey;
+  receivingChainKey: ChainKey;
   sendingEphemeralKey?: EphemeralKeyPair;
   receivingEphemeralPublicKey?: PublicKey;
-  skippedMessageKeys: Map<number, MessageKey>; // For out-of-order messages
+  sendCounter: number;
+  receiveCounter: number;
+  skippedMessageKeys: Map<number, MessageKey>;
   previousChainLength: number;
 }
-

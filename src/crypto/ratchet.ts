@@ -12,7 +12,6 @@
 
 import type {
   RatchetState,
-  RootKey,
   MessageKey,
   EphemeralKeyPair,
   PublicKey,
@@ -35,6 +34,10 @@ import {
 export function createRatchetState(): RatchetState {
   return {
     rootKey: { key: new Uint8Array(CRYPTO_CONSTANTS.ROOT_KEY_SIZE) },
+    sendingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
+    receivingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
+    sendCounter: 0,
+    receiveCounter: 0,
     skippedMessageKeys: new Map(),
     previousChainLength: 0,
   };
@@ -48,17 +51,25 @@ export function createRatchetState(): RatchetState {
  */
 export function initializeRatchet(
   state: RatchetState,
-  rootKey: RootKey,
+  rootKey: { key: Uint8Array },
   sendingEphemeralKey?: EphemeralKeyPair,
   receivingEphemeralPublicKey?: PublicKey
 ): void {
   state.rootKey = rootKey;
+  state.sendCounter = 0;
+  state.receiveCounter = 0;
+  
   if (sendingEphemeralKey !== undefined) {
     state.sendingEphemeralKey = sendingEphemeralKey;
   }
   if (receivingEphemeralPublicKey !== undefined) {
     state.receivingEphemeralPublicKey = receivingEphemeralPublicKey;
   }
+  
+  const chainKeyBytes = deriveChainKey(state.rootKey.key, 'initial-chain');
+  state.sendingChainKey = { key: chainKeyBytes, index: 0 };
+  state.receivingChainKey = { key: chainKeyBytes, index: 0 };
+  
   state.previousChainLength = 0;
 }
 

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bundle Test</title>
+</head>
+<body>
+    <h1>Testing SecureMessenger Bundle</h1>
+    <div id="output"></div>
+    <script src="secure-messenger-client.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(message) {
+            console.log(message);
+            const p = document.createElement('p');
+            p.textContent = message;
+            output.appendChild(p);
+        }
+        
+        log('Testing bundle...');
+        log('typeof SecureMessenger: ' + typeof SecureMessenger);
+        log('SecureMessenger: ' + JSON.stringify(Object.keys(SecureMessenger || {})));
+        
+        if (typeof SecureMessenger !== 'undefined') {
+            log('SecureMessengerClient: ' + typeof SecureMessenger.SecureMessengerClient);
+            log('generateIdentityKeyPair: ' + typeof SecureMessenger.generateIdentityKeyPair);
+            
+            if (typeof SecureMessenger.generateIdentityKeyPair === 'function') {
+                try {
+                    const keys = SecureMessenger.generateIdentityKeyPair();
+                    log('Successfully generated keys!');
+                    log('Public key length: ' + keys.publicKey.length);
+                } catch (e) {
+                    log('ERROR generating keys: ' + e.message);
+                }
+            }
+        } else {
+            log('ERROR: SecureMessenger is undefined!');
+        }
+    </script>
+</body>
+</html>

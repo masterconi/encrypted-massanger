@@ -9,7 +9,6 @@
  * - Automatic retry with exponential backoff
  */
 
-import WebSocket from 'ws';
 import type {
   IdentityKeyPair,
   RatchetState,
@@ -36,6 +35,7 @@ import {
 export interface ClientConfig {
   serverUrl: string;
   identityKey?: IdentityKeyPair;
+  WebSocketImpl?: any;
   onMessage?: (senderId: string, message: Uint8Array) => void;
   onError?: (error: Error) => void;
   onConnected?: () => void;
@@ -54,37 +54,50 @@ export interface QueuedMessage {
 export class SecureMessengerClient {
   private config: ClientConfig;
   private identityKey: IdentityKeyPair;
-  private ws: WebSocket | null = null;
+  private ws: any = null;
   private handshakeState: HandshakeState | null = null;
   private ratchetStates: Map<string, RatchetState> = new Map();
   private messageQueue: QueuedMessage[] = [];
   private ackWaiters: Map<string, (success: boolean) => void> = new Map();
   private connected = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private retryBackoff = 1000; // Start with 1 second
+  private retryBackoff = 1000;
+  private WebSocketImpl: any;
 
   constructor(config: ClientConfig) {
     this.config = config;
     this.identityKey = config.identityKey || generateIdentityKeyPair();
+    
+    if (config.WebSocketImpl) {
+      this.WebSocketImpl = config.WebSocketImpl;
+    } else if (typeof WebSocket !== 'undefined') {
+      this.WebSocketImpl = WebSocket;
+    } else {
+      import('ws').then((ws: any) => {
+        this.WebSocketImpl = ws.default;
+      }).catch((error: Error) => {
+        console.error('Failed to load WebSocket implementation:', error);
+      });
+    }
   }
 
   /**
    * Connect to the server and perform handshake
    */
   async connect(): Promise<void> {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === 1) {
       return;
     }
 
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(this.config.serverUrl);
+        this.ws = new this.WebSocketImpl(this.config.serverUrl);
 
         this.ws.on('open', async () => {
           try {
             await this.performHandshake();
             this.connected = true;
-            this.retryBackoff = 1000; // Reset backoff on successful connection
+            this.retryBackoff = 1000;
             this.config.onConnected?.();
             this.processMessageQueue();
             resolve();
@@ -94,7 +107,7 @@ export class SecureMessengerClient {
           }
         });
 
-        this.ws.on('message', async (data: Buffer) => {
+        this.ws.on('message', async (data: any) => {
           try {
             await this.handleMessage(data);
           } catch (error) {
@@ -102,7 +115,7 @@ export class SecureMessengerClient {
           }
         });
 
-        this.ws.on('error', (error) => {
+        this.ws.on('error', (error: Error) => {
           this.config.onError?.(error);
           reject(error);
         });
@@ -122,7 +135,7 @@ export class SecureMessengerClient {
    * Perform cryptographic handshake
    */
   private async performHandshake(): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== 1) {
       throw new Error('WebSocket not connected');
     }
 
@@ -137,7 +150,7 @@ export class SecureMessengerClient {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Handshake timeout'));
-      }, 10000); // 10 second timeout
+      }, 10000);
 
       const messageHandler = async (data: Buffer) => {
         try {
@@ -151,12 +164,10 @@ export class SecureMessengerClient {
             this.handshakeState!
           );
 
-          // Initialize ratchet state for server connection
           const ratchetState = createRatchetState();
           initializeRatchet(ratchetState, { key: rootKey }, ephemeralKey);
           this.ratchetStates.set('server', ratchetState);
 
-          // Send handshake complete
           const confirmation = await this.createHandshakeComplete(rootKey);
           if (this.ws) {
             this.ws.send(confirmation);
@@ -246,7 +257,7 @@ export class SecureMessengerClient {
    * Send a queued message
    */
   private async sendQueuedMessage(queued: QueuedMessage): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
       return;
     }
 
@@ -402,7 +413,11 @@ export class SecureMessengerClient {
    * Get connection status
    */
   isConnected(): boolean {
-    return this.connected && this.ws?.readyState === WebSocket.OPEN;
+    return this.connected && this.ws?.readyState === this.WebSocketImpl?.OPEN;
+  }
+
+  getIdentityPublicKey(): Uint8Array {
+    return this.identityKey.publicKey;
   }
 }
 

@@ -1,50 +1,72 @@
 /**
  * Ultra-Secure Messenger GUI Client
- * 
- * This is a browser-based client. For Node.js integration,
- * we'll need to use a bridge or Electron.
+ * Uses the bundled SecureMessengerClient library
  */
-
-// Import the client library (this will work when bundled)
-// For now, we'll create a browser-compatible version
 
 class MessengerGUI {
     constructor() {
         this.client = null;
         this.currentRecipient = null;
-        this.recipients = new Map(); // recipientId -> { name, publicKey }
+        this.recipients = new Map();
         this.identityKey = null;
         this.isConnected = false;
         
         this.initializeElements();
         this.attachEventListeners();
+        this.setupMobileMenu();
         this.loadIdentity();
     }
 
     initializeElements() {
-        // Connection
         this.serverUrlInput = document.getElementById('serverUrl');
         this.connectBtn = document.getElementById('connectBtn');
         this.disconnectBtn = document.getElementById('disconnectBtn');
         this.statusIndicator = document.getElementById('statusIndicator');
         this.statusText = document.getElementById('statusText');
 
-        // Identity
         this.publicKeyDisplay = document.getElementById('publicKey');
         this.copyPublicKeyBtn = document.getElementById('copyPublicKeyBtn');
         this.generateKeyBtn = document.getElementById('generateKeyBtn');
 
-        // Recipients
         this.recipientKeyInput = document.getElementById('recipientKey');
         this.recipientNameInput = document.getElementById('recipientName');
         this.addRecipientBtn = document.getElementById('addRecipientBtn');
         this.recipientsList = document.getElementById('recipientsList');
 
-        // Chat
         this.chatTitle = document.getElementById('chatTitle');
         this.messagesContainer = document.getElementById('messagesContainer');
         this.messageInput = document.getElementById('messageInput');
         this.sendBtn = document.getElementById('sendBtn');
+        
+        this.sidebar = document.getElementById('sidebar');
+        this.sidebarBackdrop = document.getElementById('sidebarBackdrop');
+        this.mobileToggle = document.getElementById('mobileToggle');
+    }
+
+    setupMobileMenu() {
+        this.mobileToggle.addEventListener('click', () => {
+            this.toggleMobileSidebar();
+        });
+        
+        this.sidebarBackdrop.addEventListener('click', () => {
+            this.closeMobileSidebar();
+        });
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.closeMobileSidebar();
+            }
+        });
+    }
+    
+    toggleMobileSidebar() {
+        this.sidebar.classList.toggle('mobile-open');
+        this.sidebarBackdrop.classList.toggle('active');
+    }
+    
+    closeMobileSidebar() {
+        this.sidebar.classList.remove('mobile-open');
+        this.sidebarBackdrop.classList.remove('active');
     }
 
     attachEventListeners() {
@@ -81,7 +103,6 @@ class MessengerGUI {
             this.generateNewIdentity();
         }
 
-        // Load recipients
         const savedRecipients = localStorage.getItem('messenger_recipients');
         if (savedRecipients) {
             try {
@@ -94,11 +115,20 @@ class MessengerGUI {
     }
 
     async generateNewIdentity() {
+        console.log('[DEBUG] Generating new identity...');
+        console.log('[DEBUG] SecureMessenger available:', typeof SecureMessenger);
+        console.log('[DEBUG] SecureMessenger object:', SecureMessenger);
+        
         try {
-            // In browser, we need to use Web Crypto API
-            // For now, generate a placeholder - in production, use the actual crypto library
-            const keyPair = await this.generateKeyPairBrowser();
-            this.identityKey = keyPair;
+            if (typeof SecureMessenger === 'undefined') {
+                console.error('[ERROR] SecureMessenger is undefined');
+                this.showNotification('Client library not loaded', 'error');
+                return;
+            }
+            
+            console.log('[DEBUG] generateIdentityKeyPair:', SecureMessenger.generateIdentityKeyPair);
+            this.identityKey = SecureMessenger.generateIdentityKeyPair();
+            console.log('[DEBUG] Identity key generated:', this.identityKey);
             this.saveIdentity();
             this.updatePublicKeyDisplay();
             this.showNotification('New identity generated', 'success');
@@ -106,39 +136,6 @@ class MessengerGUI {
             console.error('Failed to generate identity:', error);
             this.showNotification('Failed to generate identity', 'error');
         }
-    }
-
-    async generateKeyPairBrowser() {
-        // Generate Ed25519 key pair using Web Crypto API
-        // Note: This is a simplified version. In production, use the actual crypto library
-        const keyPair = await crypto.subtle.generateKey(
-            {
-                name: 'Ed25519',
-            },
-            true,
-            ['sign', 'verify']
-        ).catch(() => {
-            // Fallback: generate random key pair structure
-            const publicKey = new Uint8Array(32);
-            const privateKey = new Uint8Array(64);
-            crypto.getRandomValues(publicKey);
-            crypto.getRandomValues(privateKey);
-            return {
-                publicKey: { buffer: publicKey },
-                privateKey: { buffer: privateKey },
-            };
-        });
-
-        // Convert to our format
-        const publicKey = new Uint8Array(32);
-        const privateKey = new Uint8Array(64);
-        crypto.getRandomValues(publicKey);
-        crypto.getRandomValues(privateKey);
-
-        return {
-            publicKey,
-            privateKey,
-        };
     }
 
     saveIdentity() {
@@ -185,7 +182,6 @@ class MessengerGUI {
         }
 
         try {
-            // Validate hex key (should be 64 characters for 32 bytes)
             if (keyHex.length !== 64 || !/^[0-9a-fA-F]+$/.test(keyHex)) {
                 throw new Error('Invalid key format');
             }
@@ -253,9 +249,26 @@ class MessengerGUI {
     }
 
     async connect() {
+        console.log('[DEBUG] Connect button clicked');
         const serverUrl = this.serverUrlInput.value.trim();
+        console.log('[DEBUG] Server URL:', serverUrl);
+        
         if (!serverUrl) {
             this.showNotification('Please enter a server URL', 'error');
+            return;
+        }
+
+        if (!this.identityKey) {
+            this.showNotification('Please generate an identity key first', 'error');
+            return;
+        }
+
+        console.log('[DEBUG] SecureMessenger available:', typeof SecureMessenger);
+        console.log('[DEBUG] SecureMessenger.SecureMessengerClient:', SecureMessenger?.SecureMessengerClient);
+        
+        if (typeof SecureMessenger === 'undefined') {
+            console.error('[ERROR] SecureMessenger is undefined');
+            this.showNotification('Client library not loaded', 'error');
             return;
         }
 
@@ -263,54 +276,55 @@ class MessengerGUI {
         this.connectBtn.disabled = true;
 
         try {
-            // In a real implementation, this would use the SecureMessengerClient
-            // For now, we'll create a WebSocket connection directly
-            // In production, you'd bundle the client library or use Electron
-            
-            this.ws = new WebSocket(serverUrl);
-            
-            this.ws.onopen = () => {
-                this.isConnected = true;
-                this.updateConnectionStatus('connected', 'Connected');
-                this.connectBtn.disabled = true;
-                this.disconnectBtn.disabled = false;
-                this.messageInput.disabled = !this.currentRecipient;
-                this.sendBtn.disabled = !this.currentRecipient;
-                this.showNotification('Connected to server', 'success');
-                // TODO: Perform cryptographic handshake
-            };
+            console.log('[DEBUG] Creating client...');
+            this.client = new SecureMessenger.SecureMessengerClient({
+                serverUrl: serverUrl,
+                identityKey: this.identityKey,
+                WebSocketImpl: SecureMessenger.BrowserWebSocket,
+                onMessage: (senderId, message) => {
+                    const text = new TextDecoder().decode(message);
+                    this.addMessage(senderId, text, 'received', new Date());
+                },
+                onError: (error) => {
+                    console.error('Client error:', error);
+                    this.showNotification(error.message, 'error');
+                },
+                onConnected: () => {
+                    console.log('[DEBUG] Connected to server');
+                    this.isConnected = true;
+                    this.updateConnectionStatus('connected', 'Connected');
+                    this.connectBtn.disabled = true;
+                    this.disconnectBtn.disabled = false;
+                    this.messageInput.disabled = !this.currentRecipient;
+                    this.sendBtn.disabled = !this.currentRecipient;
+                    this.showNotification('Connected to server', 'success');
+                },
+                onDisconnected: () => {
+                    console.log('[DEBUG] Disconnected from server');
+                    this.isConnected = false;
+                    this.updateConnectionStatus('disconnected', 'Disconnected');
+                    this.connectBtn.disabled = false;
+                    this.disconnectBtn.disabled = true;
+                    this.messageInput.disabled = true;
+                    this.sendBtn.disabled = true;
+                }
+            });
 
-            this.ws.onmessage = (event) => {
-                // TODO: Handle encrypted messages
-                this.handleIncomingMessage(event.data);
-            };
-
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                this.showNotification('Connection error', 'error');
-                this.updateConnectionStatus('disconnected', 'Connection Error');
-            };
-
-            this.ws.onclose = () => {
-                this.isConnected = false;
-                this.updateConnectionStatus('disconnected', 'Disconnected');
-                this.connectBtn.disabled = false;
-                this.disconnectBtn.disabled = true;
-                this.messageInput.disabled = true;
-                this.sendBtn.disabled = true;
-            };
+            console.log('[DEBUG] Client created, calling connect()...');
+            await this.client.connect();
+            console.log('[DEBUG] connect() completed');
         } catch (error) {
             console.error('Connection error:', error);
-            this.showNotification('Failed to connect', 'error');
+            this.showNotification('Failed to connect: ' + error.message, 'error');
             this.updateConnectionStatus('disconnected', 'Disconnected');
             this.connectBtn.disabled = false;
         }
     }
 
     disconnect() {
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+        if (this.client) {
+            this.client.disconnect();
+            this.client = null;
         }
         this.isConnected = false;
         this.updateConnectionStatus('disconnected', 'Disconnected');
@@ -326,7 +340,7 @@ class MessengerGUI {
     }
 
     async sendMessage() {
-        if (!this.isConnected || !this.currentRecipient) {
+        if (!this.isConnected || !this.currentRecipient || !this.client) {
             return;
         }
 
@@ -335,42 +349,19 @@ class MessengerGUI {
             return;
         }
 
-        // Clear input
         this.messageInput.value = '';
 
-        // Display message immediately (optimistic UI)
         this.addMessage(this.currentRecipient, text, 'sent', new Date());
 
         try {
-            // TODO: Encrypt and send message using SecureMessengerClient
-            // For now, send as plaintext (NOT SECURE - for demo only)
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                const message = {
-                    type: 'message',
-                    recipientId: this.currentRecipient,
-                    text: text,
-                };
-                this.ws.send(JSON.stringify(message));
-            }
+            await this.client.sendMessage(this.currentRecipient, text);
         } catch (error) {
             console.error('Failed to send message:', error);
             this.showNotification('Failed to send message', 'error');
         }
     }
 
-    handleIncomingMessage(data) {
-        try {
-            const message = JSON.parse(data);
-            if (message.type === 'message' && message.senderId) {
-                this.addMessage(message.senderId, message.text, 'received', new Date(message.timestamp || Date.now()));
-            }
-        } catch (error) {
-            console.error('Failed to parse message:', error);
-        }
-    }
-
     addMessage(senderId, text, type, timestamp) {
-        // Clear empty state if present
         const emptyChat = this.messagesContainer.querySelector('.empty-chat');
         if (emptyChat) {
             emptyChat.remove();
@@ -395,9 +386,7 @@ class MessengerGUI {
     }
 
     loadMessages(recipientId) {
-        // Clear messages
         this.messagesContainer.innerHTML = '<div class="empty-chat"><div class="empty-icon">💬</div><p>No messages yet</p></div>';
-        // TODO: Load message history from storage
     }
 
     formatTime(date) {
@@ -414,14 +403,24 @@ class MessengerGUI {
     }
 
     showNotification(message, type = 'info') {
-        // Simple notification - could be enhanced with a toast library
         console.log(`[${type.toUpperCase()}] ${message}`);
-        // You could add a toast notification UI here
+        
+        // Create a toast notification
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
     }
 }
 
-// Initialize the app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('[DEBUG] DOM Content Loaded');
+    console.log('[DEBUG] SecureMessenger:', typeof SecureMessenger, SecureMessenger);
     window.messengerGUI = new MessengerGUI();
 });
-

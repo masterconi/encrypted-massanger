@@ -1,0 +1,114 @@
+name: Security Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  dependency-audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Verify package-lock integrity
+        run: |
+          if ! git diff --exit-code package-lock.json; then
+            echo "package-lock.json has been modified"
+            exit 1
+          fi
+          
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+          
+      - name: Check for vulnerable dependencies
+        run: npx audit-ci --moderate
+          
+      - name: Generate SBOM
+        run: npx @cyclonedx/cyclonedx-npm --output-file sbom.json
+          
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: TypeScript strict check
+        run: npx tsc --noEmit --strict
+        
+      - name: ESLint security check
+        run: npx eslint . --ext .ts --max-warnings 0
+        
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+  crypto-validation:
+    name: Cryptography Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build
+        run: npm run build
+        
+      - name: Cryptography unit tests
+        run: npm test -- --coverage
+        
+      - name: Coverage threshold check
+        run: npx nyc check-coverage --lines 90 --functions 90 --branches 85
+
+  security-gates:
+    name: Security Release Gates
+    needs: [dependency-audit, static-analysis, crypto-validation]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: All security checks passed
+        run: echo "All security gates passed - safe to deploy"
+        
+      - name: Block on failure
+        if: failure()
+        run: |
+          echo "Security gate failed - deployment blocked"
+          exit 1

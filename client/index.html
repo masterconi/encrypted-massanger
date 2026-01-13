@@ -2,11 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultra-Secure Messenger</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>🔐 Ultra-Secure Messenger</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <!-- Sidebar Backdrop for Mobile -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
@@ -25,7 +31,8 @@
         <!-- Main Content -->
         <div class="main-content">
             <!-- Sidebar -->
-            <aside class="sidebar">
+            <aside class="sidebar" id="sidebar">
+                <!-- Connection Section -->
                 <div class="sidebar-section">
                     <h2>Connection</h2>
                     <div class="connection-form">
@@ -36,41 +43,56 @@
                             placeholder="ws://localhost:8080"
                             value="ws://localhost:8080"
                         >
-                        <button id="connectBtn" class="btn btn-primary">Connect</button>
-                        <button id="disconnectBtn" class="btn btn-secondary" disabled>Disconnect</button>
+                        <button id="connectBtn" class="btn btn-primary">
+                            <span>🔌</span>
+                            Connect
+                        </button>
+                        <button id="disconnectBtn" class="btn btn-secondary" disabled>
+                            <span>⏸️</span>
+                            Disconnect
+                        </button>
                     </div>
                 </div>
 
+                <!-- Identity Section -->
                 <div class="sidebar-section">
                     <h2>My Identity</h2>
                     <div class="identity-info">
                         <div class="identity-key">
-                            <label>Public Key:</label>
-                            <div class="key-display" id="publicKey">Not generated</div>
-                            <button id="copyPublicKeyBtn" class="btn btn-small" disabled>Copy</button>
+                            <label>Public Key</label>
+                            <div class="key-display" id="publicKey">Generating...</div>
+                            <button id="copyPublicKeyBtn" class="btn btn-small btn-secondary" disabled>
+                                📋 Copy Key
+                            </button>
                         </div>
-                        <button id="generateKeyBtn" class="btn btn-secondary">Generate New Key</button>
+                        <button id="generateKeyBtn" class="btn btn-secondary">
+                            🔄 Generate New Key
+                        </button>
                     </div>
                 </div>
 
+                <!-- Recipients Section -->
                 <div class="sidebar-section">
                     <h2>Recipients</h2>
                     <div class="recipient-form">
                         <label for="recipientKey">Recipient Public Key</label>
                         <textarea 
                             id="recipientKey" 
-                            placeholder="Paste recipient's public key (hex)"
-                            rows="3"
+                            placeholder="Paste recipient's public key (64 hex characters)"
+                            rows="2"
                         ></textarea>
                         <input 
                             type="text" 
                             id="recipientName" 
-                            placeholder="Recipient name (optional)"
+                            placeholder="Name (optional)"
                         >
-                        <button id="addRecipientBtn" class="btn btn-primary">Add Recipient</button>
+                        <button id="addRecipientBtn" class="btn btn-primary">
+                            <span>➕</span>
+                            Add Recipient
+                        </button>
                     </div>
                     <div class="recipients-list" id="recipientsList">
-                        <p class="empty-state">No recipients added</p>
+                        <p class="empty-state">No recipients added yet</p>
                     </div>
                 </div>
             </aside>
@@ -84,7 +106,8 @@
                 <div class="messages-container" id="messagesContainer">
                     <div class="empty-chat">
                         <div class="empty-icon">💬</div>
-                        <p>No messages yet. Connect and start a conversation!</p>
+                        <p>Connect and select a recipient to start chatting</p>
+                        <p style="font-size: 0.75rem; opacity: 0.6;">End-to-end encrypted</p>
                     </div>
                 </div>
 
@@ -93,12 +116,11 @@
                         <textarea 
                             id="messageInput" 
                             placeholder="Type your secure message..."
-                            rows="3"
+                            rows="1"
                             disabled
                         ></textarea>
                         <button id="sendBtn" class="btn btn-primary" disabled>
                             <span class="send-icon">📤</span>
-                            Send
                         </button>
                     </div>
                 </div>
@@ -106,7 +128,12 @@
         </div>
     </div>
 
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle Menu">
+        ☰
+    </button>
+
+    <script src="secure-messenger-client.js"></script>
     <script type="module" src="app.js"></script>
 </body>
 </html>
-
