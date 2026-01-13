@@ -1,3 +1,5 @@
+# under heavy development be carfull when using!!!
+
 # 🔐 Ultra-Secure Messenger
 
 A production-ready, end-to-end encrypted messaging platform designed for maximum security, reliability, and performance.
@@ -59,8 +61,13 @@ Server starts on `ws://0.0.0.0:8080` with identity persisted to `./data/server-i
    ```
    HTTP server starts on `http://localhost:3000`
 
+<<<<<<< HEAD
 3. **Open your browser:**
    Navigate to `http://localhost:3000`
+=======
+2. **Open your browser:**
+   Navigate to `http://localhost:8000`
+>>>>>>> 787f4c79bb6d1c62d5eba8eebec8676cffcb7028
 
 4. **Mobile & Desktop Support:**
    - Responsive glassmorphism UI
@@ -194,7 +201,7 @@ Before deploying to production:
 
 ## 📄 License
 
-MIT License - See LICENSE file for details.
+Apache License Version 2.0 - See LICENSE file for details.
 
 ## 🔒 Security Fixes Applied
 
