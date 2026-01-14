@@ -158,21 +158,15 @@ export async function processHandshakeInit(
     throw new Error('Handshake timestamp out of acceptable range');
   }
   
-  // Compute shared secrets
+  // Compute shared secret
+  // Note: We use only ephemeral keys for key exchange. Identity keys are for authentication (signing) only.
   const ss1 = computeSharedSecret(
     serverEphemeralKey.privateKey,
     clientEphemeralPublicKey
   );
-  const ss2 = computeSharedSecret(
-    serverEphemeralKey.privateKey,
-    clientIdentityPublicKey
-  );
   
-  // Derive root key
-  const rootKeyInput = new Uint8Array(ss1.length + ss2.length);
-  rootKeyInput.set(ss1, 0);
-  rootKeyInput.set(ss2, ss1.length);
-  const rootKey = deriveRootKey(rootKeyInput);
+  // Derive root key from single shared secret
+  const rootKey = deriveRootKey(ss1);
   
   // Create encrypted prekey material
   const prekeyMaterial = new Uint8Array(32); // Placeholder
@@ -277,21 +271,15 @@ export async function processHandshakeResponse(
   // Note: nonce validation (uniqueness check) would require state tracking
   // For now, timestamp validation provides replay protection
   
-  // Compute shared secrets
+  // Compute shared secret
+  // Note: We use only ephemeral keys for key exchange. Identity keys are for authentication (signing) only.
   const ss1 = computeSharedSecret(
     state.ephemeralKey.privateKey,
     serverEphemeralPublicKey
   );
-  const ss2 = computeSharedSecret(
-    state.identityKey.privateKey,
-    serverEphemeralPublicKey
-  );
   
-  // Derive root key
-  const rootKeyInput = new Uint8Array(ss1.length + ss2.length);
-  rootKeyInput.set(ss1, 0);
-  rootKeyInput.set(ss2, ss1.length);
-  const rootKey = deriveRootKey(rootKeyInput);
+  // Derive root key from single shared secret
+  const rootKey = deriveRootKey(ss1);
   
   // Decrypt prekey material
   const prekeyMaterial = await decrypt(

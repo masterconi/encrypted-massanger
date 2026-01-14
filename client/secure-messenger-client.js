@@ -2388,14 +2388,7 @@ var SecureMessenger = (() => {
       state.ephemeralKey.privateKey,
       serverEphemeralPublicKey
     );
-    const ss2 = computeSharedSecret(
-      state.identityKey.privateKey,
-      serverEphemeralPublicKey
-    );
-    const rootKeyInput = new Uint8Array(ss1.length + ss2.length);
-    rootKeyInput.set(ss1, 0);
-    rootKeyInput.set(ss2, ss1.length);
-    const rootKey = deriveRootKey(rootKeyInput);
+    const rootKey = deriveRootKey(ss1);
     const prekeyMaterial = await decrypt(
       encryptedPrekey,
       tag,
@@ -2519,24 +2512,45 @@ var SecureMessenger = (() => {
       __publicField(this, "retryBackoff", 1e3);
       __publicField(this, "WebSocketImpl");
       this.config = config;
-      this.identityKey = config.identityKey || generateIdentityKeyPair();
+      if (config.identityKey) {
+        if (config.identityKey.publicKey.length !== 32) {
+          throw new Error(`Invalid identity public key size: ${config.identityKey.publicKey.length}, expected 32`);
+        }
+        if (config.identityKey.privateKey.length !== 64) {
+          throw new Error(`Invalid identity private key size: ${config.identityKey.privateKey.length}, expected 64`);
+        }
+        this.identityKey = config.identityKey;
+      } else {
+        this.identityKey = generateIdentityKeyPair();
+      }
       if (config.WebSocketImpl) {
         this.WebSocketImpl = config.WebSocketImpl;
-      } else if (typeof WebSocket !== "undefined") {
+      } else if (typeof WebSocket !== "undefined" && typeof WebSocket.prototype.on === "function") {
         this.WebSocketImpl = WebSocket;
       } else {
-        Promise.resolve().then(() => __toESM(require_browser(), 1)).then((ws) => {
-          this.WebSocketImpl = ws.default;
-        }).catch((error) => {
-          console.error("Failed to load WebSocket implementation:", error);
-        });
+        this.WebSocketImpl = null;
+      }
+    }
+    /**
+     * Ensure WebSocket implementation is loaded
+     */
+    async ensureWebSocket() {
+      if (this.WebSocketImpl) {
+        return;
+      }
+      try {
+        const ws = await Promise.resolve().then(() => __toESM(require_browser(), 1));
+        this.WebSocketImpl = ws.default;
+      } catch (error) {
+        throw new Error(`Failed to load WebSocket implementation: ${error}`);
       }
     }
     /**
      * Connect to the server and perform handshake
      */
     async connect() {
-      if (this.ws && this.ws.readyState === this.WebSocketImpl.OPEN) {
+      await this.ensureWebSocket();
+      if (this.ws && this.ws.readyState === 1) {
         return;
       }
       return new Promise((resolve, reject) => {
@@ -2580,19 +2594,23 @@ var SecureMessenger = (() => {
      * Perform cryptographic handshake
      */
     async performHandshake() {
-      if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      if (!this.ws || this.ws.readyState !== 1) {
         throw new Error("WebSocket not connected");
       }
+      console.log("[Client] Starting handshake...");
       const ephemeralKey = generateEphemeralKeyPair();
       const { message, state } = createHandshakeInit(this.identityKey, ephemeralKey);
       this.handshakeState = state;
+      console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
       this.ws.send(message);
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
+          console.error("[Client] Handshake timeout - no response received after 10 seconds");
           reject(new Error("Handshake timeout"));
         }, 1e4);
         const messageHandler = async (data) => {
           try {
+            console.log(`[Client] Received handshake response (${data.length} bytes)`);
             clearTimeout(timeout);
             if (this.ws) {
               this.ws.removeListener("message", messageHandler);
@@ -2601,19 +2619,23 @@ var SecureMessenger = (() => {
               new Uint8Array(data),
               this.handshakeState
             );
+            console.log("[Client] Handshake response processed");
             const ratchetState = createRatchetState();
             initializeRatchet(ratchetState, { key: rootKey }, ephemeralKey);
             this.ratchetStates.set("server", ratchetState);
             const confirmation = await this.createHandshakeComplete(rootKey);
+            console.log(`[Client] Sending handshake complete (${confirmation.length} bytes)...`);
             if (this.ws) {
               this.ws.send(confirmation);
             }
+            console.log("[Client] Handshake complete");
             resolve();
           } catch (error) {
             clearTimeout(timeout);
             if (this.ws) {
               this.ws.removeListener("message", messageHandler);
             }
+            console.error("[Client] Handshake error:", error);
             reject(error);
           }
         };

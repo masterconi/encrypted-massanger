@@ -16,6 +16,44 @@ class MessengerGUI {
         this.setupMobileMenu();
         this.loadIdentity();
     }
+    
+    /**
+     * Helper: Convert array-like data to proper Uint8Array
+     */
+    toUint8Array(data) {
+        if (data instanceof Uint8Array) {
+            return data;
+        }
+        if (Array.isArray(data)) {
+            const arr = new Uint8Array(data);
+            console.log('[DEBUG] toUint8Array from Array:', {
+                inputLength: data.length,
+                outputLength: arr.length,
+                outputType: arr.constructor.name,
+                match: arr.length === data.length
+            });
+            return arr;
+        }
+        if (data && typeof data === 'object' && data.length !== undefined) {
+            // Handle array-like objects
+            const arr = new Uint8Array(Array.from(data));
+            console.log('[DEBUG] toUint8Array from array-like:', {
+                inputLength: data.length,
+                outputLength: arr.length,
+                outputType: arr.constructor.name,
+                match: arr.length === data.length
+            });
+            return arr;
+        }
+        throw new Error(`Cannot convert ${typeof data} to Uint8Array`);
+    }
+    
+    /**
+     * Helper: Convert Uint8Array to hex string for display
+     */
+    toHexString(data) {
+        return Array.from(data).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
 
     initializeElements() {
         this.serverUrlInput = document.getElementById('serverUrl');
@@ -90,10 +128,38 @@ class MessengerGUI {
         if (saved) {
             try {
                 const keyData = JSON.parse(saved);
+                console.log('[DEBUG] Raw keyData from localStorage:', {
+                    publicKeyLength: keyData.publicKey?.length,
+                    privateKeyLength: keyData.privateKey?.length,
+                    publicKeyType: typeof keyData.publicKey,
+                    privateKeyType: typeof keyData.privateKey,
+                });
+                
+                // Properly convert to Uint8Array using helper
+                const publicKey = this.toUint8Array(keyData.publicKey);
+                const privateKey = this.toUint8Array(keyData.privateKey);
+                
+                console.log('[DEBUG] After conversion:', {
+                    publicKeySize: publicKey.length,
+                    privateKeySize: privateKey.length,
+                    publicKeyType: publicKey.constructor.name,
+                    privateKeyType: privateKey.constructor.name,
+                });
+                
                 this.identityKey = {
-                    publicKey: new Uint8Array(keyData.publicKey),
-                    privateKey: new Uint8Array(keyData.privateKey),
+                    publicKey: publicKey,
+                    privateKey: privateKey,
                 };
+                
+                // Validate key sizes
+                if (this.identityKey.publicKey.length !== 32) {
+                    throw new Error(`Invalid public key size: ${this.identityKey.publicKey.length}, expected 32`);
+                }
+                if (this.identityKey.privateKey.length !== 64) {
+                    throw new Error(`Invalid private key size: ${this.identityKey.privateKey.length}, expected 64`);
+                }
+                
+                console.log('[DEBUG] Identity loaded successfully');
                 this.updatePublicKeyDisplay();
             } catch (e) {
                 console.error('Failed to load identity:', e);
@@ -128,13 +194,27 @@ class MessengerGUI {
             
             console.log('[DEBUG] generateIdentityKeyPair:', SecureMessenger.generateIdentityKeyPair);
             this.identityKey = SecureMessenger.generateIdentityKeyPair();
-            console.log('[DEBUG] Identity key generated:', this.identityKey);
+            console.log('[DEBUG] Identity key generated:', {
+                publicKey: this.identityKey.publicKey,
+                publicKeySize: this.identityKey.publicKey.length,
+                privateKey: this.identityKey.privateKey,
+                privateKeySize: this.identityKey.privateKey.length
+            });
+            
+            // Validate key sizes
+            if (this.identityKey.publicKey.length !== 32) {
+                throw new Error(`Invalid public key size: ${this.identityKey.publicKey.length}, expected 32`);
+            }
+            if (this.identityKey.privateKey.length !== 64) {
+                throw new Error(`Invalid private key size: ${this.identityKey.privateKey.length}, expected 64`);
+            }
+            
             this.saveIdentity();
             this.updatePublicKeyDisplay();
             this.showNotification('New identity generated', 'success');
         } catch (error) {
             console.error('Failed to generate identity:', error);
-            this.showNotification('Failed to generate identity', 'error');
+            this.showNotification('Failed to generate identity: ' + error.message, 'error');
         }
     }
 
@@ -144,7 +224,14 @@ class MessengerGUI {
                 publicKey: Array.from(this.identityKey.publicKey),
                 privateKey: Array.from(this.identityKey.privateKey),
             };
+            console.log('[DEBUG] Saving identity - lengths:', {
+                publicKey: keyData.publicKey.length,
+                privateKey: keyData.privateKey.length
+            });
+            console.log('[DEBUG] Full keyData being saved:', keyData);
             localStorage.setItem('messenger_identity', JSON.stringify(keyData));
+            const loaded = localStorage.getItem('messenger_identity');
+            console.log('[DEBUG] Verification - loaded from storage:', loaded.substring(0, 100) + '...');
         }
     }
 
@@ -277,6 +364,25 @@ class MessengerGUI {
 
         try {
             console.log('[DEBUG] Creating client...');
+            
+            // Debug: Log identity key details before creating client
+            console.log('[DEBUG] Identity key before client creation:', {
+                publicKeyType: this.identityKey.publicKey.constructor.name,
+                publicKeySize: this.identityKey.publicKey.length,
+                publicKeyBytes: Array.from(this.identityKey.publicKey.slice(0, 8)),
+                privateKeyType: this.identityKey.privateKey.constructor.name,
+                privateKeySize: this.identityKey.privateKey.length,
+                privateKeyBytes: Array.from(this.identityKey.privateKey.slice(0, 8)),
+            });
+            
+            // Validate before using
+            if (this.identityKey.publicKey.length !== 32) {
+                throw new Error(`Invalid public key size before client creation: ${this.identityKey.publicKey.length}`);
+            }
+            if (this.identityKey.privateKey.length !== 64) {
+                throw new Error(`Invalid private key size before client creation: ${this.identityKey.privateKey.length}`);
+            }
+            
             this.client = new SecureMessenger.SecureMessengerClient({
                 serverUrl: serverUrl,
                 identityKey: this.identityKey,
@@ -311,6 +417,12 @@ class MessengerGUI {
             });
 
             console.log('[DEBUG] Client created, calling connect()...');
+            console.log('[DEBUG] Client instance:', {
+                connectedStatus: this.client.connected,
+                hasIdentityKey: !!this.client.identityKey,
+                identityKeyPublicKeySize: this.client.identityKey?.publicKey?.length,
+                identityKeyPrivateKeySize: this.client.identityKey?.privateKey?.length,
+            });
             await this.client.connect();
             console.log('[DEBUG] connect() completed');
         } catch (error) {

@@ -66,18 +66,46 @@ export class SecureMessengerClient {
 
   constructor(config: ClientConfig) {
     this.config = config;
-    this.identityKey = config.identityKey || generateIdentityKeyPair();
+    
+    // Validate or generate identity key
+    if (config.identityKey) {
+      // Validate the provided identity key
+      if (config.identityKey.publicKey.length !== 32) {
+        throw new Error(`Invalid identity public key size: ${config.identityKey.publicKey.length}, expected 32`);
+      }
+      if (config.identityKey.privateKey.length !== 64) {
+        throw new Error(`Invalid identity private key size: ${config.identityKey.privateKey.length}, expected 64`);
+      }
+      this.identityKey = config.identityKey;
+    } else {
+      this.identityKey = generateIdentityKeyPair();
+    }
     
     if (config.WebSocketImpl) {
       this.WebSocketImpl = config.WebSocketImpl;
-    } else if (typeof WebSocket !== 'undefined') {
+    } else if (typeof WebSocket !== 'undefined' && typeof (WebSocket.prototype as any).on === 'function') {
+      // Only use global WebSocket if it has the .on() method (ws module or browser implementation)
+      // Native Node.js WebSocket in v24+ has addEventListener but not .on()
       this.WebSocketImpl = WebSocket;
     } else {
-      import('ws').then((ws: any) => {
-        this.WebSocketImpl = ws.default;
-      }).catch((error: Error) => {
-        console.error('Failed to load WebSocket implementation:', error);
-      });
+      // Will be loaded asynchronously in Node.js (ws module)
+      this.WebSocketImpl = null;
+    }
+  }
+
+  /**
+   * Ensure WebSocket implementation is loaded
+   */
+  private async ensureWebSocket(): Promise<void> {
+    if (this.WebSocketImpl) {
+      return;
+    }
+
+    try {
+      const ws = await import('ws');
+      this.WebSocketImpl = ws.default;
+    } catch (error) {
+      throw new Error(`Failed to load WebSocket implementation: ${error}`);
     }
   }
 
@@ -85,6 +113,8 @@ export class SecureMessengerClient {
    * Connect to the server and perform handshake
    */
   async connect(): Promise<void> {
+    await this.ensureWebSocket();
+
     if (this.ws && this.ws.readyState === 1) {
       return;
     }
@@ -139,21 +169,25 @@ export class SecureMessengerClient {
       throw new Error('WebSocket not connected');
     }
 
+    console.log('[Client] Starting handshake...');
     const ephemeralKey = generateEphemeralKeyPair();
     const { message, state } = createHandshakeInit(this.identityKey, ephemeralKey);
     this.handshakeState = state;
 
+    console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
     // Send handshake init
     this.ws.send(message);
 
     // Wait for handshake response
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        console.error('[Client] Handshake timeout - no response received after 10 seconds');
         reject(new Error('Handshake timeout'));
       }, 10000);
 
       const messageHandler = async (data: Buffer) => {
         try {
+          console.log(`[Client] Received handshake response (${data.length} bytes)`);
           clearTimeout(timeout);
           if (this.ws) {
             this.ws.removeListener('message', messageHandler);
@@ -164,21 +198,25 @@ export class SecureMessengerClient {
             this.handshakeState!
           );
 
+          console.log('[Client] Handshake response processed');
           const ratchetState = createRatchetState();
           initializeRatchet(ratchetState, { key: rootKey }, ephemeralKey);
           this.ratchetStates.set('server', ratchetState);
 
           const confirmation = await this.createHandshakeComplete(rootKey);
+          console.log(`[Client] Sending handshake complete (${confirmation.length} bytes)...`);
           if (this.ws) {
             this.ws.send(confirmation);
           }
 
+          console.log('[Client] Handshake complete');
           resolve();
         } catch (error) {
           clearTimeout(timeout);
           if (this.ws) {
             this.ws.removeListener('message', messageHandler);
           }
+          console.error('[Client] Handshake error:', error);
           reject(error);
         }
       };

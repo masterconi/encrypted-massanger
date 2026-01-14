@@ -17,7 +17,6 @@ import type { IdentityKeyPair } from '../crypto/types.js';
 import {
   generateIdentityKeyPair,
   generateEphemeralKeyPair,
-  sign,
 } from '../crypto/keygen.js';
 import {
   processHandshakeInit,
@@ -209,7 +208,10 @@ export class SecureMessengerServer {
     session: ClientSession
   ): Promise<void> {
     try {
+      console.log(`[Server] Handshake started from ${session.clientId}. Message size: ${messageData.length}`);
+      
       if (messageData.length !== 152) {
+        console.error(`[Server] Invalid handshake format. Expected 152 bytes, got ${messageData.length}`);
         ws.close(1007, 'Invalid handshake format');
         return;
       }
@@ -223,24 +225,28 @@ export class SecureMessengerServer {
       }
 
       const serverEphemeralKey = generateEphemeralKeyPair();
+      console.log(`[Server] Processing handshake init...`);
+      
       const { response, clientIdentityPublicKey } = await processHandshakeInit(
         messageData,
         this.serverIdentityKey,
         serverEphemeralKey
       );
 
-      const signature = sign(this.serverIdentityKey.privateKey, response);
-      const signedResponse = new Uint8Array(response.length + 64);
-      signedResponse.set(response, 0);
-      signedResponse.set(signature, response.length);
-
-      ws.send(signedResponse);
+      console.log(`[Server] Handshake init processed. Response size: ${response.length}`);
+      
+      // Send response directly - no additional signature needed
+      // The response from processHandshakeInit already contains everything the client needs
+      ws.send(response);
+      console.log(`[Server] Handshake response sent (${response.length} bytes)`);
+      
       session.handshakeComplete = true;
       session.handshakeCount++;
       session.lastHandshakeTime = Date.now();
       session.clientId = Buffer.from(clientIdentityPublicKey).toString('hex');
+      console.log(`[Server] Handshake complete for ${session.clientId}`);
     } catch (error) {
-      console.error('Handshake error:', error);
+      console.error('[Server] Handshake error:', error);
       ws.close(1008, 'Handshake failed');
     }
   }
