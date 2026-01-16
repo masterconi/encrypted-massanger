@@ -66,7 +66,7 @@ export class SecureMessengerClient {
 
   constructor(config: ClientConfig) {
     this.config = config;
-    
+
     // Validate or generate identity key
     if (config.identityKey) {
       // Validate the provided identity key
@@ -80,7 +80,7 @@ export class SecureMessengerClient {
     } else {
       this.identityKey = generateIdentityKeyPair();
     }
-    
+
     if (config.WebSocketImpl) {
       this.WebSocketImpl = config.WebSocketImpl;
     } else if (typeof WebSocket !== 'undefined' && typeof (WebSocket.prototype as any).on === 'function') {
@@ -128,6 +128,16 @@ export class SecureMessengerClient {
             await this.performHandshake();
             this.connected = true;
             this.retryBackoff = 1000;
+
+            // Now attach the general message handler AFTER handshake is complete
+            this.ws.on('message', async (data: any) => {
+              try {
+                await this.handleMessage(data);
+              } catch (error) {
+                this.config.onError?.(error as Error);
+              }
+            });
+
             this.config.onConnected?.();
             this.processMessageQueue();
             resolve();
@@ -137,22 +147,28 @@ export class SecureMessengerClient {
           }
         });
 
-        this.ws.on('message', async (data: any) => {
-          try {
-            await this.handleMessage(data);
-          } catch (error) {
-            this.config.onError?.(error as Error);
-          }
-        });
-
         this.ws.on('error', (error: Error) => {
           this.config.onError?.(error);
           reject(error);
         });
 
-        this.ws.on('close', () => {
+        this.ws.on('close', (code: number, reason: string) => {
           this.connected = false;
           this.config.onDisconnected?.();
+
+          // Don't reconnect on fatal errors or normal closure
+          // 1000: Normal
+          // 1002: Protocol Error
+          // 1003: Unsupported Data
+          // 1007: Invalid Frame Payload Data (likely malformed message)
+          // 1008: Policy Violation (Rate limit)
+          // 1009: Message Too Big
+          // 1011: Internal Error
+          if ([1000, 1002, 1003, 1007, 1008, 1009, 1011].includes(code)) {
+            console.warn(`[Client] Connection closed with code ${code} (${reason}). Not reconnecting.`);
+            return;
+          }
+
           this.scheduleReconnect();
         });
       } catch (error) {
@@ -174,24 +190,20 @@ export class SecureMessengerClient {
     const { message, state } = createHandshakeInit(this.identityKey, ephemeralKey);
     this.handshakeState = state;
 
-    console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
-    // Send handshake init
-    this.ws.send(message);
-
-    // Wait for handshake response
+    // Wait for handshake response response BEFORE sending the init
     return new Promise((resolve, reject) => {
+      let cleanup: () => void;
+
       const timeout = setTimeout(() => {
         console.error('[Client] Handshake timeout - no response received after 10 seconds');
+        cleanup();
         reject(new Error('Handshake timeout'));
       }, 10000);
 
       const messageHandler = async (data: Buffer) => {
         try {
           console.log(`[Client] Received handshake response (${data.length} bytes)`);
-          clearTimeout(timeout);
-          if (this.ws) {
-            this.ws.removeListener('message', messageHandler);
-          }
+          cleanup();
 
           const { rootKey } = await processHandshakeResponse(
             new Uint8Array(data),
@@ -203,39 +215,51 @@ export class SecureMessengerClient {
           initializeRatchet(ratchetState, { key: rootKey }, ephemeralKey);
           this.ratchetStates.set('server', ratchetState);
 
-          const confirmation = await this.createHandshakeComplete(rootKey);
-          console.log(`[Client] Sending handshake complete (${confirmation.length} bytes)...`);
-          if (this.ws) {
-            this.ws.send(confirmation);
-          }
+          // Handshake is confirmed implicitly by successful processing
+          // No need to create/send explicit confirmation message as it would be rejected as invalid data
 
           console.log('[Client] Handshake complete');
           resolve();
         } catch (error) {
-          clearTimeout(timeout);
-          if (this.ws) {
-            this.ws.removeListener('message', messageHandler);
-          }
+          cleanup();
           console.error('[Client] Handshake error:', error);
           reject(error);
         }
       };
 
+      const closeHandler = (code: number, reason: string) => {
+        cleanup();
+        reject(new Error(`WebSocket closed during handshake: ${code} ${reason}`));
+      };
+
+      const errorHandler = (error: Error) => {
+        cleanup();
+        reject(new Error(`WebSocket error during handshake: ${error.message}`));
+      };
+
+      cleanup = () => {
+        clearTimeout(timeout);
+        if (this.ws) {
+          this.ws.removeListener('message', messageHandler);
+          this.ws.removeListener('close', closeHandler);
+          this.ws.removeListener('error', errorHandler);
+        }
+      };
+
+      // Set up the message handler FIRST
       if (this.ws) {
         this.ws.on('message', messageHandler);
+        this.ws.on('close', closeHandler);
+        this.ws.on('error', errorHandler);
       }
+
+      // Then send handshake init
+      console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
+      this.ws.send(message);
     });
   }
 
-  /**
-   * Create handshake complete message
-   */
-  private async createHandshakeComplete(_rootKey: Uint8Array): Promise<Uint8Array> {
-    // Simplified - in production, implement proper confirmation
-    const confirmation = new Uint8Array(32);
-    crypto.getRandomValues(confirmation);
-    return confirmation;
-  }
+
 
   /**
    * Handle incoming message
@@ -244,11 +268,11 @@ export class SecureMessengerClient {
     // Parse message type and route accordingly
     // Simplified - in production, use proper message format
     // const messageData = new Uint8Array(data);
-    
+
     // Check if it's a handshake message, encrypted message, or ack
     // For now, assume encrypted message
     // In production, implement proper message type detection
-    
+
     // Decrypt and process message
     // This requires proper message format implementation
   }

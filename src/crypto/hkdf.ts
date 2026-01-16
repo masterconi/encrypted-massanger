@@ -33,26 +33,27 @@ function hkdfExpand(prk: Uint8Array, info: Uint8Array, length: number): Uint8Arr
   if (length > 255 * 32) {
     throw new Error('HKDF output length too large');
   }
-  
+
   const n = Math.ceil(length / 32);
   const output = new Uint8Array(length);
-  const temp = new Uint8Array(32 + info.length + 1);
-  
+  let prev = new Uint8Array(0); // T(0) is empty
+
   let offset = 0;
   for (let i = 1; i <= n; i++) {
     // T(i) = HMAC-Hash(PRK, T(i-1) | INFO | i)
-    if (i > 1) {
-      temp.set(output.slice(offset - 32, offset), 0);
-    }
-    temp.set(info, i > 1 ? 32 : 0);
-    temp[temp.length - 1] = i;
-    
-    const hmacResult = hmac(sha256, prk, temp.slice(i > 1 ? 0 : 32));
+    const data = new Uint8Array(prev.length + info.length + 1);
+    data.set(prev, 0);
+    data.set(info, prev.length);
+    data[data.length - 1] = i;
+
+    const hmacResult = hmac(sha256, prk, data);
+    prev = hmacResult; // T(i) becomes T(i-1) for next iter
+
     const copyLength = Math.min(32, length - offset);
     output.set(hmacResult.slice(0, copyLength), offset);
     offset += copyLength;
   }
-  
+
   return output;
 }
 
@@ -74,11 +75,11 @@ export function hkdf(
   if (length === 0) {
     throw new Error('HKDF output length must be > 0');
   }
-  
-  const infoBytes = typeof info === 'string' 
+
+  const infoBytes = typeof info === 'string'
     ? new TextEncoder().encode(info)
     : info;
-  
+
   const prk = hkdfExtract(salt, inputKeyMaterial);
   return hkdfExpand(prk, infoBytes, length);
 }
@@ -125,7 +126,7 @@ export function deriveMessageKey(chainKey: Uint8Array): {
     CRYPTO_CONSTANTS.HKDF_MESSAGE_KEY_INFO,
     64
   );
-  
+
   return {
     messageKey: output.slice(0, 32),      // Encryption key
     nextChainKey: output.slice(32, 64),   // Next chain key

@@ -85,11 +85,11 @@ export class SecureMessengerServer {
       messageExpiryMs: config.messageExpiryMs ?? CRYPTO_CONSTANTS.MESSAGE_EXPIRY_MS,
       rateLimitWindowMs: config.rateLimitWindowMs ?? 60000,
       rateLimitMaxMessages: config.rateLimitMaxMessages ?? 100,
-      handshakeRateLimitPerMin: config.handshakeRateLimitPerMin ?? 10,
+      handshakeRateLimitPerMin: config.handshakeRateLimitPerMin ?? 1000,
       maxStoredMessages: config.maxStoredMessages ?? 10000,
       maxSessions: config.maxSessions ?? 10000,
     };
-    
+
     this.serverIdentityKey = config.serverIdentityKey ?? generateIdentityKeyPair();
     this.nonceTracker = new NonceTracker({
       ttlMs: 300000,
@@ -209,7 +209,7 @@ export class SecureMessengerServer {
   ): Promise<void> {
     try {
       console.log(`[Server] Handshake started from ${session.clientId}. Message size: ${messageData.length}`);
-      
+
       if (messageData.length !== 152) {
         console.error(`[Server] Invalid handshake format. Expected 152 bytes, got ${messageData.length}`);
         ws.close(1007, 'Invalid handshake format');
@@ -217,7 +217,7 @@ export class SecureMessengerServer {
       }
 
       const nonce = messageData.slice(136, 152);
-      
+
       if (!this.nonceTracker.check(nonce)) {
         console.warn('Replay attack detected:', Buffer.from(nonce).toString('hex'));
         ws.close(1008, 'Replay detected');
@@ -226,7 +226,7 @@ export class SecureMessengerServer {
 
       const serverEphemeralKey = generateEphemeralKeyPair();
       console.log(`[Server] Processing handshake init...`);
-      
+
       const { response, clientIdentityPublicKey } = await processHandshakeInit(
         messageData,
         this.serverIdentityKey,
@@ -234,12 +234,12 @@ export class SecureMessengerServer {
       );
 
       console.log(`[Server] Handshake init processed. Response size: ${response.length}`);
-      
+
       // Send response directly - no additional signature needed
       // The response from processHandshakeInit already contains everything the client needs
       ws.send(response);
       console.log(`[Server] Handshake response sent (${response.length} bytes)`);
-      
+
       session.handshakeComplete = true;
       session.handshakeCount++;
       session.lastHandshakeTime = Date.now();
@@ -258,30 +258,30 @@ export class SecureMessengerServer {
   ): Promise<void> {
     try {
       const messageId = messageData.slice(0, 16);
-      
+
       let offset = 16;
       const headerLenView = new DataView(messageData.buffer, messageData.byteOffset + offset, 4);
       const headerLen = headerLenView.getUint32(0, false);
       offset += 4;
-      
+
       if (offset + headerLen > messageData.length) {
         ws.close(1007, 'Invalid message format');
         return;
       }
-      
+
       const header = messageData.slice(offset, offset + headerLen);
       offset += headerLen;
-      
+
       if (header.length >= 4) {
         const sequenceView = new DataView(header.buffer, header.byteOffset, 4);
         const sequence = sequenceView.getUint32(0, false);
-        
+
         if (sequence !== session.expectedSequence) {
           console.warn(`Sequence mismatch: expected ${session.expectedSequence}, got ${sequence}`);
           ws.close(1007, 'Sequence error');
           return;
         }
-        
+
         session.expectedSequence++;
       }
 
@@ -299,20 +299,20 @@ export class SecureMessengerServer {
   private createAck(messageId: Uint8Array): Uint8Array {
     const ack = new Uint8Array(16 + 8 + 1);
     ack.set(messageId, 0);
-    
+
     const timestamp = BigInt(Date.now());
     const timestampView = new BigUint64Array(ack.buffer, 16, 1);
     timestampView[0] = timestamp;
-    
+
     ack[24] = 1;
-    
+
     return ack;
   }
 
   private checkHandshakeRateLimit(session: ClientSession): boolean {
     const now = Date.now();
     const clientId = session.clientId;
-    
+
     let limiter = this.rateLimiters.get(clientId);
     if (!limiter) {
       limiter = {
@@ -368,7 +368,7 @@ export class SecureMessengerServer {
 
   public storeMessage(recipientId: string, messageData: Uint8Array, sequence: number): void {
     let messages = this.messageStore.get(recipientId) || [];
-    
+
     if (messages.length >= this.config.maxStoredMessages) {
       messages = messages.slice(-this.config.maxStoredMessages + 1);
     }
@@ -412,7 +412,7 @@ export class SecureMessengerServer {
   private startCleanupTask(): void {
     this.cleanupTimer = setInterval(() => {
       const now = Date.now();
-      
+
       for (const [recipientId, messages] of this.messageStore.entries()) {
         const validMessages = messages.filter((msg) => now < msg.expiresAt);
         if (validMessages.length === 0) {
@@ -436,7 +436,7 @@ export class SecureMessengerServer {
           const bTime = b[1][0]?.storedAt ?? 0;
           return aTime - bTime;
         });
-        
+
         for (let i = 0; i < entries.length / 2; i++) {
           this.messageStore.delete(entries[i]![0]);
         }

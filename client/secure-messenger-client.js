@@ -2082,15 +2082,15 @@ var SecureMessenger = (() => {
     }
     const n = Math.ceil(length / 32);
     const output2 = new Uint8Array(length);
-    const temp = new Uint8Array(32 + info.length + 1);
+    let prev = new Uint8Array(0);
     let offset = 0;
     for (let i = 1; i <= n; i++) {
-      if (i > 1) {
-        temp.set(output2.slice(offset - 32, offset), 0);
-      }
-      temp.set(info, i > 1 ? 32 : 0);
-      temp[temp.length - 1] = i;
-      const hmacResult = hmac(sha256, prk, temp.slice(i > 1 ? 0 : 32));
+      const data = new Uint8Array(prev.length + info.length + 1);
+      data.set(prev, 0);
+      data.set(info, prev.length);
+      data[data.length - 1] = i;
+      const hmacResult = hmac(sha256, prk, data);
+      prev = hmacResult;
       const copyLength = Math.min(32, length - offset);
       output2.set(hmacResult.slice(0, copyLength), offset);
       offset += copyLength;
@@ -2561,6 +2561,13 @@ var SecureMessenger = (() => {
               await this.performHandshake();
               this.connected = true;
               this.retryBackoff = 1e3;
+              this.ws.on("message", async (data) => {
+                try {
+                  await this.handleMessage(data);
+                } catch (error) {
+                  this.config.onError?.(error);
+                }
+              });
               this.config.onConnected?.();
               this.processMessageQueue();
               resolve();
@@ -2569,20 +2576,17 @@ var SecureMessenger = (() => {
               reject(error);
             }
           });
-          this.ws.on("message", async (data) => {
-            try {
-              await this.handleMessage(data);
-            } catch (error) {
-              this.config.onError?.(error);
-            }
-          });
           this.ws.on("error", (error) => {
             this.config.onError?.(error);
             reject(error);
           });
-          this.ws.on("close", () => {
+          this.ws.on("close", (code, reason) => {
             this.connected = false;
             this.config.onDisconnected?.();
+            if ([1e3, 1002, 1003, 1007, 1008, 1009, 1011].includes(code)) {
+              console.warn(`[Client] Connection closed with code ${code} (${reason}). Not reconnecting.`);
+              return;
+            }
             this.scheduleReconnect();
           });
         } catch (error) {
@@ -2601,20 +2605,17 @@ var SecureMessenger = (() => {
       const ephemeralKey = generateEphemeralKeyPair();
       const { message, state } = createHandshakeInit(this.identityKey, ephemeralKey);
       this.handshakeState = state;
-      console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
-      this.ws.send(message);
       return new Promise((resolve, reject) => {
+        let cleanup;
         const timeout = setTimeout(() => {
           console.error("[Client] Handshake timeout - no response received after 10 seconds");
+          cleanup();
           reject(new Error("Handshake timeout"));
         }, 1e4);
         const messageHandler = async (data) => {
           try {
             console.log(`[Client] Received handshake response (${data.length} bytes)`);
-            clearTimeout(timeout);
-            if (this.ws) {
-              this.ws.removeListener("message", messageHandler);
-            }
+            cleanup();
             const { rootKey } = await processHandshakeResponse(
               new Uint8Array(data),
               this.handshakeState
@@ -2623,34 +2624,38 @@ var SecureMessenger = (() => {
             const ratchetState = createRatchetState();
             initializeRatchet(ratchetState, { key: rootKey }, ephemeralKey);
             this.ratchetStates.set("server", ratchetState);
-            const confirmation = await this.createHandshakeComplete(rootKey);
-            console.log(`[Client] Sending handshake complete (${confirmation.length} bytes)...`);
-            if (this.ws) {
-              this.ws.send(confirmation);
-            }
             console.log("[Client] Handshake complete");
             resolve();
           } catch (error) {
-            clearTimeout(timeout);
-            if (this.ws) {
-              this.ws.removeListener("message", messageHandler);
-            }
+            cleanup();
             console.error("[Client] Handshake error:", error);
             reject(error);
           }
         };
+        const closeHandler = (code, reason) => {
+          cleanup();
+          reject(new Error(`WebSocket closed during handshake: ${code} ${reason}`));
+        };
+        const errorHandler = (error) => {
+          cleanup();
+          reject(new Error(`WebSocket error during handshake: ${error.message}`));
+        };
+        cleanup = () => {
+          clearTimeout(timeout);
+          if (this.ws) {
+            this.ws.removeListener("message", messageHandler);
+            this.ws.removeListener("close", closeHandler);
+            this.ws.removeListener("error", errorHandler);
+          }
+        };
         if (this.ws) {
           this.ws.on("message", messageHandler);
+          this.ws.on("close", closeHandler);
+          this.ws.on("error", errorHandler);
         }
+        console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
+        this.ws.send(message);
       });
-    }
-    /**
-     * Create handshake complete message
-     */
-    async createHandshakeComplete(_rootKey) {
-      const confirmation = new Uint8Array(32);
-      crypto.getRandomValues(confirmation);
-      return confirmation;
     }
     /**
      * Handle incoming message
@@ -2825,15 +2830,20 @@ var SecureMessenger = (() => {
     constructor(url) {
       super();
       __publicField(this, "ws");
+      __publicField(this, "listeners", /* @__PURE__ */ new Map());
       this.ws = new WebSocket(url);
+      this.ws.binaryType = "arraybuffer";
       this.ws.onopen = () => {
         this.dispatchEvent(new Event("open"));
       };
       this.ws.onclose = (event) => {
-        const closeEvent = new Event("close");
-        closeEvent.code = event.code;
-        closeEvent.reason = event.reason;
-        closeEvent.wasClean = event.wasClean;
+        const closeEvent = new CustomEvent("close", {
+          detail: {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean
+          }
+        });
         this.dispatchEvent(closeEvent);
       };
       this.ws.onerror = () => {
@@ -2868,16 +2878,24 @@ var SecureMessenger = (() => {
       this.ws.close(code, reason);
     }
     on(event, handler) {
-      this.addEventListener(event, (e) => {
-        if (e instanceof MessageEvent) {
+      const wrapper = (e) => {
+        if (event === "message" && e instanceof MessageEvent) {
           handler(e.data);
+        } else if (event === "close" && e instanceof CustomEvent) {
+          handler(e.detail.code, e.detail.reason);
         } else {
           handler();
         }
-      });
+      };
+      this.listeners.set(handler, wrapper);
+      this.addEventListener(event, wrapper);
     }
     removeListener(event, handler) {
-      this.removeEventListener(event, handler);
+      const wrapper = this.listeners.get(handler);
+      if (wrapper) {
+        this.removeEventListener(event, wrapper);
+        this.listeners.delete(handler);
+      }
     }
   };
   if (typeof globalThis.Buffer === "undefined") {
