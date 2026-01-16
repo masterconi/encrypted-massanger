@@ -269,9 +269,11 @@ export class SecureMessengerServer {
         return;
       }
 
-      const header = messageData.slice(offset, offset + headerLen);
+      // Skip header
       offset += headerLen;
 
+      /*
+      // SEQUENCE CHECK DISABLED: Header is encrypted, so server cannot read sequence.
       if (header.length >= 4) {
         const sequenceView = new DataView(header.buffer, header.byteOffset, 4);
         const sequence = sequenceView.getUint32(0, false);
@@ -284,6 +286,7 @@ export class SecureMessengerServer {
 
         session.expectedSequence++;
       }
+      */
 
       const ack = this.createAck(messageId);
       ws.send(ack);

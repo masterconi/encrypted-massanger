@@ -40,8 +40,8 @@ export interface RootKey {
 
 export interface RatchetState {
   rootKey: RootKey;
-  sendingChainKey: ChainKey;
-  receivingChainKey: ChainKey;
+  sendingChainKey?: ChainKey;
+  receivingChainKey?: ChainKey;
   sendingEphemeralKey?: EphemeralKeyPair;
   receivingEphemeralPublicKey?: PublicKey;
   sendCounter: number;

@@ -2141,8 +2141,6 @@ var SecureMessenger = (() => {
   function createRatchetState() {
     return {
       rootKey: { key: new Uint8Array(CRYPTO_CONSTANTS.ROOT_KEY_SIZE) },
-      sendingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
-      receivingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
       sendCounter: 0,
       receiveCounter: 0,
       skippedMessageKeys: /* @__PURE__ */ new Map(),
@@ -2555,13 +2553,14 @@ var SecureMessenger = (() => {
       }
       return new Promise((resolve, reject) => {
         try {
-          this.ws = new this.WebSocketImpl(this.config.serverUrl);
-          this.ws.on("open", async () => {
+          const ws = new this.WebSocketImpl(this.config.serverUrl);
+          this.ws = ws;
+          ws.on("open", async () => {
             try {
               await this.performHandshake();
               this.connected = true;
               this.retryBackoff = 1e3;
-              this.ws.on("message", async (data) => {
+              ws.on("message", async (data) => {
                 try {
                   await this.handleMessage(data);
                 } catch (error) {
@@ -2576,11 +2575,11 @@ var SecureMessenger = (() => {
               reject(error);
             }
           });
-          this.ws.on("error", (error) => {
+          ws.on("error", (error) => {
             this.config.onError?.(error);
             reject(error);
           });
-          this.ws.on("close", (code, reason) => {
+          ws.on("close", (code, reason) => {
             this.connected = false;
             this.config.onDisconnected?.();
             if ([1e3, 1002, 1003, 1007, 1008, 1009, 1011].includes(code)) {
@@ -2607,6 +2606,7 @@ var SecureMessenger = (() => {
       this.handshakeState = state;
       return new Promise((resolve, reject) => {
         let cleanup;
+        const ws = this.ws;
         const timeout = setTimeout(() => {
           console.error("[Client] Handshake timeout - no response received after 10 seconds");
           cleanup();
@@ -2642,25 +2642,44 @@ var SecureMessenger = (() => {
         };
         cleanup = () => {
           clearTimeout(timeout);
-          if (this.ws) {
-            this.ws.removeListener("message", messageHandler);
-            this.ws.removeListener("close", closeHandler);
-            this.ws.removeListener("error", errorHandler);
-          }
+          ws.removeListener("message", messageHandler);
+          ws.removeListener("close", closeHandler);
+          ws.removeListener("error", errorHandler);
         };
-        if (this.ws) {
-          this.ws.on("message", messageHandler);
-          this.ws.on("close", closeHandler);
-          this.ws.on("error", errorHandler);
-        }
+        ws.on("message", messageHandler);
+        ws.on("close", closeHandler);
+        ws.on("error", errorHandler);
         console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
-        this.ws.send(message);
+        ws.send(message);
       });
     }
     /**
-     * Handle incoming message
+    /**
+     * Handle incoming message from WebSocket
+     * 
+     * Routes messages based on size and structure:
+     * - Acknowledgment (25 bytes): Resolves the Promise for the sent message
+     * - Encrypted Message (> 20 bytes): Forwards to the onMessage callback
+     * 
+     * @param data - Raw message data from WebSocket
      */
-    async handleMessage(_data) {
+    async handleMessage(data) {
+      const buffer = data instanceof BrowserBuffer ? data : BrowserBuffer.from(data);
+      if (buffer.length === 25) {
+        const messageId = buffer.slice(0, 16);
+        const status = buffer[24];
+        const messageIdHex = messageId.toString("hex");
+        const waiter = this.ackWaiters.get(messageIdHex);
+        if (waiter) {
+          waiter(status === 1);
+          this.ackWaiters.delete(messageIdHex);
+        }
+        return;
+      }
+      if (buffer.length > 20) {
+        const senderId = "unknown";
+        this.config.onMessage?.(senderId, new Uint8Array(buffer));
+      }
     }
     /**
      * Send a message to a recipient
@@ -2690,12 +2709,13 @@ var SecureMessenger = (() => {
      * Send a queued message
      */
     async sendQueuedMessage(queued) {
-      if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      const ws = this.ws;
+      if (!ws || ws.readyState !== this.WebSocketImpl.OPEN) {
         return;
       }
       try {
         const messageBytes = this.serializeMessage(queued.encryptedData);
-        this.ws.send(messageBytes);
+        ws.send(messageBytes);
         const ackReceived = await new Promise((resolve) => {
           const timeout = setTimeout(() => {
             resolve(false);
@@ -2871,12 +2891,26 @@ var SecureMessenger = (() => {
     get OPEN() {
       return WebSocket.OPEN;
     }
+    /**
+     * Send data to server
+     * @param data - Data to send
+     */
     send(data) {
       this.ws.send(data);
     }
+    /**
+     * Close the connection
+     * @param code - Close code
+     * @param reason - Close reason
+     */
     close(code, reason) {
       this.ws.close(code, reason);
     }
+    /**
+     * Add event listener(Node.js style)
+     * @param event - Event name
+     * @param handler - Event handler
+     */
     on(event, handler) {
       const wrapper = (e) => {
         if (event === "message" && e instanceof MessageEvent) {
@@ -2890,6 +2924,11 @@ var SecureMessenger = (() => {
       this.listeners.set(handler, wrapper);
       this.addEventListener(event, wrapper);
     }
+    /**
+     * Remove event listener(Node.js style)
+     * @param event - Event name
+     * @param handler - Event handler to remove
+     */
     removeListener(event, handler) {
       const wrapper = this.listeners.get(handler);
       if (wrapper) {

@@ -34,8 +34,7 @@ import {
 export function createRatchetState(): RatchetState {
   return {
     rootKey: { key: new Uint8Array(CRYPTO_CONSTANTS.ROOT_KEY_SIZE) },
-    sendingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
-    receivingChainKey: { key: new Uint8Array(CRYPTO_CONSTANTS.CHAIN_KEY_SIZE), index: 0 },
+
     sendCounter: 0,
     receiveCounter: 0,
     skippedMessageKeys: new Map(),
@@ -58,18 +57,18 @@ export function initializeRatchet(
   state.rootKey = rootKey;
   state.sendCounter = 0;
   state.receiveCounter = 0;
-  
+
   if (sendingEphemeralKey !== undefined) {
     state.sendingEphemeralKey = sendingEphemeralKey;
   }
   if (receivingEphemeralPublicKey !== undefined) {
     state.receivingEphemeralPublicKey = receivingEphemeralPublicKey;
   }
-  
+
   const chainKeyBytes = deriveChainKey(state.rootKey.key, 'initial-chain');
   state.sendingChainKey = { key: chainKeyBytes, index: 0 };
   state.receivingChainKey = { key: chainKeyBytes, index: 0 };
-  
+
   state.previousChainLength = 0;
 }
 
@@ -93,7 +92,7 @@ export function ratchetEncrypt(
       // Generate new ephemeral key pair
       state.sendingEphemeralKey = generateEphemeralKeyPair();
     }
-    
+
     // Derive new chain key from root key
     const chainKeyBytes = deriveChainKey(
       state.rootKey.key,
@@ -104,12 +103,12 @@ export function ratchetEncrypt(
       index: 0,
     };
   }
-  
+
   // Derive message key from chain key
   const { messageKey: messageKeyBytes, nextChainKey } = deriveMessageKey(
-    state.sendingChainKey.key
+    state.sendingChainKey!.key
   );
-  
+
   // Create message key structure
   // messageKeyBytes is 32 bytes (encryption key), we need to derive MAC key separately
   // For now, use HKDF to derive both from messageKeyBytes
@@ -118,24 +117,24 @@ export function ratchetEncrypt(
     encryptionKey: messageKeyBytes,
     macKey: macKey,
     iv: new Uint8Array(CRYPTO_CONSTANTS.AES_IV_SIZE), // Will be generated during encryption
-    index: state.sendingChainKey.index,
+    index: state.sendingChainKey!.index,
   };
-  
+
   // Update chain key
   state.sendingChainKey = {
     key: nextChainKey,
-    index: state.sendingChainKey.index + 1,
+    index: state.sendingChainKey!.index + 1,
   };
-  
+
   // Check chain length limit
-  if (state.sendingChainKey.index >= CRYPTO_CONSTANTS.MAX_CHAIN_LENGTH) {
+  if (state.sendingChainKey!.index >= CRYPTO_CONSTANTS.MAX_CHAIN_LENGTH) {
     throw new Error('Chain length exceeded, must perform new handshake');
   }
-  
+
   // For now, return simplified structure
   // In full implementation, header would be encrypted separately
   const header = new Uint8Array(0); // Placeholder
-  
+
   return {
     messageKey,
     header,
@@ -158,32 +157,32 @@ export function ratchetDecrypt(
   // Check if this is a new DH key (new chain)
   const isNewChain = !state.receivingEphemeralPublicKey ||
     !constantTimeEqual(state.receivingEphemeralPublicKey, dhPublicKey);
-  
+
   if (isNewChain) {
     // Save previous chain length
     state.previousChainLength = state.receivingChainKey?.index || 0;
-    
+
     // Compute new root key and chain key
     if (!state.sendingEphemeralKey) {
       throw new Error('Cannot ratchet: no sending ephemeral key');
     }
-    
+
     const sharedSecret = computeSharedSecret(
       state.sendingEphemeralKey.privateKey,
       dhPublicKey
     );
-    
+
     // Derive new root key
     const rootKeyInput = new Uint8Array(
       state.rootKey.key.length + sharedSecret.length
     );
     rootKeyInput.set(state.rootKey.key, 0);
     rootKeyInput.set(sharedSecret, state.rootKey.key.length);
-    
+
     state.rootKey = {
       key: deriveRootKey(rootKeyInput),
     };
-    
+
     // Derive new receiving chain key
     const chainKeyBytes = deriveChainKey(
       state.rootKey.key,
@@ -193,13 +192,13 @@ export function ratchetDecrypt(
       key: chainKeyBytes,
       index: 0,
     };
-    
+
     state.receivingEphemeralPublicKey = dhPublicKey;
-    
+
     // Zero shared secret
     secureZeroMemory(sharedSecret);
   }
-  
+
   // Check if message is from a skipped chain
   if (messageNumber < state.previousChainLength) {
     // Try to find in skipped message keys
@@ -210,28 +209,28 @@ export function ratchetDecrypt(
     }
     throw new Error('Message from old chain, key not available');
   }
-  
+
   // Check if message is out of order (future message)
   if (!state.receivingChainKey) {
     throw new Error('No receiving chain key available');
   }
-  
-  if (messageNumber > state.receivingChainKey.index) {
+
+  if (messageNumber > state.receivingChainKey!.index) {
     // Skip forward to this message number
-    const skipCount = messageNumber - state.receivingChainKey.index;
+    const skipCount = messageNumber - state.receivingChainKey!.index;
     if (skipCount > CRYPTO_CONSTANTS.MAX_SKIPPED_MESSAGES) {
       throw new Error('Too many skipped messages');
     }
-    
+
     // Derive keys for skipped messages and store them
-    let currentKey = state.receivingChainKey.key;
-    let currentIndex = state.receivingChainKey.index;
-    
+    let currentKey = state.receivingChainKey!.key;
+    let currentIndex = state.receivingChainKey!.index;
+
     while (currentIndex < messageNumber) {
       const { messageKey: messageKeyBytes, nextChainKey } = deriveMessageKey(
         currentKey
       );
-      
+
       if (currentIndex < messageNumber - 1) {
         // Store skipped message key
         const skippedMacKey = hkdf(messageKeyBytes, null, 'mac-key', 32);
@@ -243,37 +242,37 @@ export function ratchetDecrypt(
         };
         state.skippedMessageKeys.set(currentIndex, skippedKey);
       }
-      
+
       currentKey = nextChainKey;
       currentIndex++;
     }
-    
+
     state.receivingChainKey = {
       key: currentKey,
       index: currentIndex,
     };
   }
-  
+
   // Derive message key for current message
   const { messageKey: messageKeyBytes, nextChainKey } = deriveMessageKey(
-    state.receivingChainKey.key
+    state.receivingChainKey!.key
   );
-  
+
   // Derive MAC key from encryption key
   const macKey = hkdf(messageKeyBytes, null, 'mac-key', 32);
   const messageKey: MessageKey = {
     encryptionKey: messageKeyBytes,
     macKey: macKey,
     iv: new Uint8Array(CRYPTO_CONSTANTS.AES_IV_SIZE),
-    index: state.receivingChainKey.index,
+    index: state.receivingChainKey!.index,
   };
-  
+
   // Update chain key
   state.receivingChainKey = {
     key: nextChainKey,
-    index: state.receivingChainKey.index + 1,
+    index: state.receivingChainKey!.index + 1,
   };
-  
+
   return messageKey;
 }
 
@@ -285,7 +284,7 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) {
     return false;
   }
-  
+
   let result = 0;
   for (let i = 0; i < a.length; i++) {
     const aByte = a[i];
@@ -294,7 +293,7 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
       result |= aByte ^ bByte;
     }
   }
-  
+
   return result === 0;
 }
 
@@ -314,7 +313,7 @@ export function cleanupRatchet(state: RatchetState): void {
   if (state.sendingEphemeralKey?.privateKey) {
     secureZeroMemory(state.sendingEphemeralKey.privateKey);
   }
-  
+
   // Clean up skipped message keys
   for (const key of state.skippedMessageKeys.values()) {
     secureZeroMemory(key.encryptionKey);

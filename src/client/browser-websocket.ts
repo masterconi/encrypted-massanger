@@ -58,14 +58,28 @@ export class BrowserWebSocket extends EventTarget {
     return WebSocket.OPEN;
   }
 
+  /**
+   * Send data to server
+   * @param data - Data to send
+   */
   send(data: Uint8Array | ArrayBuffer): void {
     this.ws.send(data);
   }
 
+  /**
+   * Close the connection
+   * @param code - Close code
+   * @param reason - Close reason
+   */
   close(code?: number, reason?: string): void {
     this.ws.close(code, reason);
   }
 
+  /**
+   * Add event listener(Node.js style)
+   * @param event - Event name
+   * @param handler - Event handler
+   */
   on(event: string, handler: (...args: any[]) => void): void {
     const wrapper = (e: Event) => {
       if (event === 'message' && e instanceof MessageEvent) {
@@ -82,6 +96,11 @@ export class BrowserWebSocket extends EventTarget {
     this.addEventListener(event, wrapper as EventListener);
   }
 
+  /**
+   * Remove event listener(Node.js style)
+   * @param event - Event name
+   * @param handler - Event handler to remove
+   */
   removeListener(event: string, handler: (...args: any[]) => void): void {
     const wrapper = this.listeners.get(handler);
     if (wrapper) {

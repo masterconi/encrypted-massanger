@@ -42,6 +42,18 @@ export interface ClientConfig {
   onDisconnected?: () => void;
 }
 
+/**
+ * Standard interface for WebSocket connection
+ * Compatible with both browser WebSocket and 'ws' package
+ */
+export interface WebSocketConnection {
+  readonly readyState: number;
+  send(data: any): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, listener: (...args: any[]) => void): void;
+  removeListener(event: string, listener: (...args: any[]) => void): void;
+}
+
 export interface QueuedMessage {
   messageId: Uint8Array;
   recipientId: string;
@@ -54,7 +66,7 @@ export interface QueuedMessage {
 export class SecureMessengerClient {
   private config: ClientConfig;
   private identityKey: IdentityKeyPair;
-  private ws: any = null;
+  private ws: WebSocketConnection | null = null;
   private handshakeState: HandshakeState | null = null;
   private ratchetStates: Map<string, RatchetState> = new Map();
   private messageQueue: QueuedMessage[] = [];
@@ -121,16 +133,17 @@ export class SecureMessengerClient {
 
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new this.WebSocketImpl(this.config.serverUrl);
+        const ws = new this.WebSocketImpl(this.config.serverUrl);
+        this.ws = ws;
 
-        this.ws.on('open', async () => {
+        ws.on('open', async () => {
           try {
             await this.performHandshake();
             this.connected = true;
             this.retryBackoff = 1000;
 
             // Now attach the general message handler AFTER handshake is complete
-            this.ws.on('message', async (data: any) => {
+            ws.on('message', async (data: any) => {
               try {
                 await this.handleMessage(data);
               } catch (error) {
@@ -147,12 +160,12 @@ export class SecureMessengerClient {
           }
         });
 
-        this.ws.on('error', (error: Error) => {
+        ws.on('error', (error: Error) => {
           this.config.onError?.(error);
           reject(error);
         });
 
-        this.ws.on('close', (code: number, reason: string) => {
+        ws.on('close', (code: number, reason: string) => {
           this.connected = false;
           this.config.onDisconnected?.();
 
@@ -193,6 +206,7 @@ export class SecureMessengerClient {
     // Wait for handshake response response BEFORE sending the init
     return new Promise((resolve, reject) => {
       let cleanup: () => void;
+      const ws = this.ws!;
 
       const timeout = setTimeout(() => {
         console.error('[Client] Handshake timeout - no response received after 10 seconds');
@@ -239,42 +253,65 @@ export class SecureMessengerClient {
 
       cleanup = () => {
         clearTimeout(timeout);
-        if (this.ws) {
-          this.ws.removeListener('message', messageHandler);
-          this.ws.removeListener('close', closeHandler);
-          this.ws.removeListener('error', errorHandler);
-        }
+        ws.removeListener('message', messageHandler);
+        ws.removeListener('close', closeHandler);
+        ws.removeListener('error', errorHandler);
       };
 
       // Set up the message handler FIRST
-      if (this.ws) {
-        this.ws.on('message', messageHandler);
-        this.ws.on('close', closeHandler);
-        this.ws.on('error', errorHandler);
-      }
+      ws.on('message', messageHandler);
+      ws.on('close', closeHandler);
+      ws.on('error', errorHandler);
 
       // Then send handshake init
       console.log(`[Client] Sending handshake init (${message.length} bytes)...`);
-      this.ws.send(message);
+      ws.send(message);
     });
   }
 
 
 
   /**
-   * Handle incoming message
+  /**
+   * Handle incoming message from WebSocket
+   * 
+   * Routes messages based on size and structure:
+   * - Acknowledgment (25 bytes): Resolves the Promise for the sent message
+   * - Encrypted Message (> 20 bytes): Forwards to the onMessage callback
+   * 
+   * @param data - Raw message data from WebSocket
    */
-  private async handleMessage(_data: Buffer): Promise<void> {
-    // Parse message type and route accordingly
-    // Simplified - in production, use proper message format
-    // const messageData = new Uint8Array(data);
+  private async handleMessage(data: Buffer | ArrayBuffer | Buffer[]): Promise<void> {
+    const buffer = data instanceof Buffer
+      ? data
+      : Buffer.from(data as ArrayBuffer); // Handle various input types
 
-    // Check if it's a handshake message, encrypted message, or ack
-    // For now, assume encrypted message
-    // In production, implement proper message type detection
+    // Check for Ack (25 bytes)
+    // 16 (msgId) + 8 (timestamp) + 1 (status)
+    if (buffer.length === 25) {
+      const messageId = buffer.slice(0, 16);
+      // const timestamp = buffer.readBigUInt64LE(16);
+      const status = buffer[24];
 
-    // Decrypt and process message
-    // This requires proper message format implementation
+      const messageIdHex = messageId.toString('hex');
+      const waiter = this.ackWaiters.get(messageIdHex);
+
+      if (waiter) {
+        waiter(status === 1);
+        this.ackWaiters.delete(messageIdHex);
+      }
+      return;
+    }
+
+    // Encrypted Message (forwarded)
+    // Structure: messageId(16) + headerLen(4) + header + ...
+    if (buffer.length > 20) {
+      const senderId = 'unknown'; // In a real system, the server would wrap the message with sender info
+      // For this P2P/Relay demo, we just pass the raw buffer to the application callback
+      // The application will need to try to decrypt it with known sessions
+
+      this.config.onMessage?.(senderId, new Uint8Array(buffer));
+    }
   }
 
   /**
@@ -319,14 +356,15 @@ export class SecureMessengerClient {
    * Send a queued message
    */
   private async sendQueuedMessage(queued: QueuedMessage): Promise<void> {
-    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== this.WebSocketImpl.OPEN) {
       return;
     }
 
     try {
       // Serialize message (simplified)
       const messageBytes = this.serializeMessage(queued.encryptedData);
-      this.ws.send(messageBytes);
+      ws.send(messageBytes);
 
       // Wait for acknowledgment
       const ackReceived = await new Promise<boolean>((resolve) => {
